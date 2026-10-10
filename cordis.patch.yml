@@ -1,0 +1,3 @@
+- insert:
+    - id: quota-plan
+      name: dsh-quota-plan
