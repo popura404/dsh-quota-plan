@@ -8,21 +8,19 @@
   const fullTimeFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
   const updateTimeFormatter = new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false });
   const dayFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" });
-  const numberFormatters = new Map();
   const requestControllers = new Set();
   const state = { status: null, loading: false, saving: false, generation: 0, chartKey: null, requestsKey: null, pricingRows: [], toastTimer: null, actionError: null, connectionFailed: false, requestSearch: "", requestFilter: "all", requestExpanded: false, requestRows: new Map(), emptyRequestRow: null, chartColumns: new Map(), pageActive: true };
+  Object.assign(state, { pricingRoutes: [], pricingAliases: [], pricingModelList: [], pricingShown: 0, syncingPrices: false });
 
   function number(value, fallback = 0) {
     const result = Number(value);
     return Number.isFinite(result) ? result : fallback;
   }
 
-  function percent(value, digits = 2) {
+  function percent(value) {
     const n = Math.max(0, number(value));
-    const minimum = 10 ** -digits;
-    if (n > 0 && n < minimum) return `< ${minimum.toFixed(digits)}%`;
-    if (!numberFormatters.has(digits)) numberFormatters.set(digits, new Intl.NumberFormat("en-US", { maximumFractionDigits: digits }));
-    return `${numberFormatters.get(digits).format(n)}%`;
+    if (n > 0 && n < 1) return "< 1%";
+    return `${Math.round(n)}%`;
   }
 
   function weeklyPercent(value) {
@@ -168,7 +166,7 @@
     $(`${prefix}-card`).classList.toggle("is-critical", critical);
     $(`${prefix}-card`).dataset.level = !enabled ? "disabled" : exhausted ? "blocked" : critical ? "critical" : warning ? "warning" : "normal";
     setText(`${prefix}-percent`, percent(occupiedPercent));
-    $(`${prefix}-percent`).title = `已使用 ${percent(limit > 0 ? used / limit * 100 : 0, 4)}，已预留 ${percent(limit > 0 ? reserved / limit * 100 : 0, 4)}`;
+    $(`${prefix}-percent`).title = `已使用 ${percent(limit > 0 ? used / limit * 100 : 0)}，已预留 ${percent(limit > 0 ? reserved / limit * 100 : 0)}`;
     setText(`${prefix}-used`, percent(limit > 0 ? used / limit * 100 : 0));
     setText(`${prefix}-available`, percent(limit > 0 ? remaining / limit * 100 : 0));
     setText(`${prefix}-status`, !enabled ? "未启用限制" : exhausted ? "额度已耗尽" : critical ? "接近上限" : warning ? "余量较低" : "可使用");
@@ -217,6 +215,7 @@
     setText("integration-note", `${note}${status.version ? ` · v${status.version}` : ""}`);
     renderChart(status.daily || []);
     renderRequests(status.recent || []);
+    renderPricingStatus();
     updateCountdowns();
   }
 
@@ -257,9 +256,10 @@
     const largest = Math.max(...points.map((item) => item.amount), 0);
     const empty = largest <= 0;
     const magnitude = largest > 0 ? 10 ** Math.floor(Math.log10(largest)) : 1;
-    const maximum = largest > 0 ? Math.ceil(largest / magnitude) * magnitude : 1;
-    setText("chart-scale-top", empty ? "—" : percent(maximum, 3));
-    setText("chart-scale-middle", empty ? "—" : percent(maximum / 2, 3));
+    const scaleStep = Math.max(2, magnitude);
+    const maximum = Math.max(scaleStep, Math.ceil(largest / scaleStep) * scaleStep);
+    setText("chart-scale-top", empty ? "—" : percent(maximum));
+    setText("chart-scale-middle", empty ? "—" : percent(maximum / 2));
     setText("chart-total", percent(points.reduce((sum, item) => sum + item.amount, 0)));
     const chart = $("daily-chart");
     const emptyMessage = $("chart-empty");
@@ -276,7 +276,7 @@
       layout.querySelectorAll(".chart-scale, .chart-guides").forEach((element) => { element.hidden = empty; });
       if (emptyMessage && !layout.contains(emptyMessage)) layout.hidden = empty;
     }
-    chart.setAttribute("aria-label", `近 7 天用量占每周额度比例：${points.map((item) => `${item.date} ${percent(item.amount, 6)}`).join("，")}`);
+    chart.setAttribute("aria-label", `近 7 天用量占每周额度比例：${points.map((item) => `${item.date} ${percent(item.amount)}`).join("，")}`);
     if (empty) return;
     const liveDates = new Set(days);
     for (const [date, entry] of state.chartColumns) {
@@ -299,12 +299,12 @@
       }
       const { column, bar, day, tooltip } = entry;
       column.className = `chart-column${index === 6 ? " today" : ""}${item.amount <= 0 ? " zero" : ""}`;
-      column.setAttribute("aria-label", `${item.date} 用量占每周额度 ${percent(item.amount, 6)}`);
+      column.setAttribute("aria-label", `${item.date} 用量占每周额度 ${percent(item.amount)}`);
       const height = item.amount > 0 ? Math.max(4, item.amount / maximum * 124) : 3;
       bar.setAttribute("y", String(130 - height));
       bar.setAttribute("height", String(height));
       day.textContent = index === 6 ? "今天" : `${Number(item.date.slice(5, 7))}/${Number(item.date.slice(8, 10))}`;
-      tooltip.textContent = percent(item.amount, 6);
+      tooltip.textContent = percent(item.amount);
       if (chart.children[index] !== column) chart.insertBefore(column, chart.children[index] || null);
     });
   }
@@ -385,7 +385,7 @@
       time.textContent = at ? timeFormatter.format(at) : "—";
       time.title = at ? `${fullTimeFormatter.format(at)}（北京时间）` : "";
       badge.className = `request-status ${label.className}`; badge.textContent = label.label;
-      cost.textContent = number(item.reservedUsd) > 0 && requestCategory(item.status) === "pending" ? `预留 ${percent(weeklyPercent(item.reservedUsd), 6)}` : percent(weeklyPercent(item.costUsd), 6);
+      cost.textContent = number(item.reservedUsd) > 0 && requestCategory(item.status) === "pending" ? `预留 ${percent(weeklyPercent(item.reservedUsd))}` : percent(weeklyPercent(item.costUsd));
       return entry.row;
     });
     if (!desired.length) desired.push(getEmptyRequestRow(filtered));
@@ -413,26 +413,156 @@
     const config = state.status.config;
     $("enabled").checked = config.enabled !== false;
     $("five-hour-enabled").checked = config.fiveHourEnabled !== false;
-    $("max-output-tokens").value = number(config.maxOutputTokens, 8192);
+    $("reservation-mode").value = config.reservationMode === "context" ? "context" : "request";
+    $("output-reservation-tokens").value = number(config.outputReservationTokens, 2048);
     $("input-token-multiplier").value = number(config.inputTokenMultiplier, 1.25);
+    $("auto-pricing-enabled").checked = config.autoPricingEnabled !== false;
+    $("pricing-cny-per-usd").value = config.pricingCnyPerUsd ?? "";
+    state.pricingRoutes = []; state.pricingAliases = [];
+    $("pricing-routes").replaceChildren(); $("pricing-aliases").replaceChildren();
+    $("pricing-provider-list").replaceChildren();
+    for (const provider of state.status.providers || []) {
+      const option = document.createElement("option"); option.value = provider.id; option.label = provider.name || provider.id;
+      $("pricing-provider-list").append(option);
+    }
+    const providers = new Set([...Object.keys(config.pricingRoutes || {}), ...(state.status.providers || []).map((provider) => provider.id)]);
+    for (const provider of providers) appendPricingRoute(provider, config.pricingRoutes?.[provider] || "");
+    if (!providers.size) appendPricingRoute();
+    for (const [requestId, model] of Object.entries(config.pricingModelAliases || {})) appendPricingAlias(requestId, model);
     $("settings-error").hidden = true;
     if ($("advanced-pricing")) $("advanced-pricing").open = false;
     state.pricingRows = [];
     $("pricing-body").replaceChildren();
     const models = new Map((state.status.pricingModels || []).map((model) => [model.id, model]));
     for (const id of Object.keys(config.modelRates || {})) if (!models.has(id)) models.set(id, { id, source: "自定义模型" });
-    for (const model of models.values()) appendPricingRow(model, config.modelRates?.[model.id]);
+    state.pricingModelList = [...models.values()].sort((a, b) => Number(!!config.modelRates?.[b.id]) - Number(!!config.modelRates?.[a.id]));
+    state.pricingShown = 0;
+    showMorePrices();
     if (!models.size) appendPricingRow(null);
     $("settings-dialog").showModal();
+    renderPricingStatus();
+  }
+
+  function removeMapping(row, collection, entry) {
+    const button = document.createElement("button"); button.type = "button"; button.className = "quiet-button remove-mapping";
+    button.textContent = "×"; button.setAttribute("aria-label", "删除此项");
+    button.addEventListener("click", () => { collection.splice(collection.indexOf(entry), 1); row.remove(); });
+    row.append(button);
+  }
+
+  function mappingInput(placeholder, value = "") {
+    const input = document.createElement("input"); input.type = "text"; input.placeholder = placeholder;
+    input.value = value; input.maxLength = 256; input.setAttribute("aria-label", placeholder); return input;
+  }
+
+  function appendPricingRoute(provider = "", sourceId = "") {
+    const row = document.createElement("div"); row.className = "pricing-mapping";
+    const input = mappingInput("DSH 服务 ID", provider); input.maxLength = 200; input.setAttribute("list", "pricing-provider-list");
+    const select = document.createElement("select"); select.setAttribute("aria-label", "该服务的价格来源");
+    const manual = document.createElement("option"); manual.value = ""; manual.textContent = "仅手动单价"; select.append(manual);
+    for (const source of state.status.pricing?.sources || []) {
+      const option = document.createElement("option"); option.value = source.id;
+      option.textContent = source.label + (source.supported ? "" : " · 尚未接入"); option.disabled = !source.supported; select.append(option);
+    }
+    select.value = sourceId;
+    row.append(input, select);
+    const entry = { input, select }; state.pricingRoutes.push(entry); removeMapping(row, state.pricingRoutes, entry);
+    $("pricing-routes").append(row);
+  }
+
+  function appendPricingAlias(requestId = "", model = "") {
+    const row = document.createElement("div"); row.className = "pricing-mapping";
+    const input = mappingInput("完整服务/请求模型", requestId); const target = mappingInput("对应的目录型号", model);
+    target.setAttribute("list", "pricing-catalog-models"); row.append(input, target);
+    const entry = { input, target }; state.pricingAliases.push(entry); removeMapping(row, state.pricingAliases, entry);
+    $("pricing-aliases").append(row);
+  }
+
+  function showMorePrices() {
+    const end = Math.min(state.pricingShown + 40, state.pricingModelList.length);
+    for (const model of state.pricingModelList.slice(state.pricingShown, end)) appendPricingRow(model, state.status.config.modelRates?.[model.id]);
+    state.pricingShown = end;
+    $("pricing-more").hidden = end >= state.pricingModelList.length;
+    $("pricing-more").textContent = `显示更多模型（${end} / ${state.pricingModelList.length}）`;
+  }
+
+  function renderPricingStatus() {
+    if (!$("settings-dialog").open) return;
+    const pricing = state.status?.pricing || {};
+    const sources = pricing.sources || [];
+    const busy = state.syncingPrices || pricing.refreshing;
+    $("sync-prices").disabled = busy || state.saving;
+    $("save-settings").disabled = state.saving || state.syncingPrices;
+    $("sync-prices").textContent = busy ? "正在同步…" : "立即同步";
+    const bound = sources.filter((source) => source.bound);
+    const ready = bound.filter((source) => source.state === "ready").length;
+    setText("pricing-sync-status", pricing.cacheError || (busy ? "正在读取官方价格，完成后自动更新状态。" : !pricing.enabled ? "自动取价已关闭，现有手动配置继续生效。" : bound.length ? `已绑定 ${bound.length} 个来源，${ready} 个可用于记账。` : "选择来源并保存后开始自动取价。"));
+    $("pricing-sources").replaceChildren();
+    const labels = { idle: "待同步", refreshing: "同步中", ready: "可用", stale: "缓存已过期", error: "同步失败", "exchange-rate-required": "待设置汇率", "credentials-required": "尚未接入鉴权" };
+    for (const source of sources) {
+      const card = document.createElement("div"); card.className = "pricing-source"; card.dataset.state = source.state;
+      const heading = document.createElement("div"); heading.className = "pricing-source-heading";
+      const link = document.createElement("a"); link.textContent = source.label; link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      const badge = document.createElement("span"); badge.className = "pricing-source-state"; badge.textContent = `${labels[source.state] || source.state}${source.modelCount ? ` · ${source.modelCount} 个型号` : ""}`;
+      heading.append(link, badge); card.append(heading);
+      const note = document.createElement("p"); note.className = "pricing-source-note";
+      const checked = dateOf(source.lastSuccessAt);
+      note.textContent = source.error || (checked ? `最近成功：${fullTimeFormatter.format(checked)} · ${source.currency}` : source.supported ? `${source.currency} · 保存绑定后按需获取` : "接口需要独立凭据，本版本暂不使用。");
+      if (source.state === "error" && checked) note.textContent += `；最近有效缓存：${fullTimeFormatter.format(checked)}`;
+      card.append(note); $("pricing-sources").append(card);
+    }
+    const latest = new Map((state.status.pricingModels || []).map((model) => [model.id, model]));
+    state.pricingModelList = state.pricingModelList.map((model) => latest.get(model.id) || {
+      ...model, input: null, output: null, cacheRead: null, cacheWrite: null,
+      available: false, waitingForExchangeRate: false, source: "暂无可用价格",
+    });
+    const existingIds = new Set(state.pricingModelList.map((model) => model.id));
+    for (const model of latest.values()) if (!existingIds.has(model.id)) state.pricingModelList.push(model);
+    for (const row of state.pricingRows) {
+      if (!row.model || row.custom.checked) continue;
+      const model = latest.get(row.model.id);
+      row.source.textContent = model?.source || "暂无可用价格";
+      row.source.title = [...(model?.notes || []), model?.checkedAt ? fullTimeFormatter.format(dateOf(model.checkedAt)) : ""].filter(Boolean).join("；");
+      for (const [key, input] of Object.entries(row.inputs)) {
+        input.value = model && model.available !== false && model[key] != null ? model[key] : "";
+        input.placeholder = model?.waitingForExchangeRate ? "待汇率" : "待同步";
+      }
+    }
+    if (state.pricingShown < Math.min(40, state.pricingModelList.length)) showMorePrices();
+    $("pricing-more").hidden = state.pricingShown >= state.pricingModelList.length;
+    $("pricing-more").textContent = `显示更多模型（${state.pricingShown} / ${state.pricingModelList.length}）`;
+    $("pricing-catalog-models").replaceChildren();
+    const seen = new Set();
+    for (const model of latest.values()) {
+      const separator = model.id.indexOf('/'); if (separator < 0) continue;
+      const value = model.id.slice(separator + 1); if (seen.has(value)) continue; seen.add(value);
+      const option = document.createElement("option"); option.value = value; $("pricing-catalog-models").append(option);
+    }
+  }
+
+  async function syncPrices() {
+    if (state.syncingPrices || state.saving || state.status?.pricing?.refreshing) return;
+    const sourceIds = [...new Set(state.pricingRoutes.map((row) => row.select.value).filter(Boolean))];
+    if (!sourceIds.length) { setText("settings-error", "请先选择至少一个服务的价格来源。"); $("settings-error").hidden = false; return; }
+    const generation = ++state.generation;
+    state.syncingPrices = true; renderPricingStatus();
+    try {
+      const status = validateStatus(await request("/api/pricing/refresh", { method: "POST", headers: { "Content-Type": "application/json", "X-DSH-Quota": "1" }, body: JSON.stringify({ sourceIds }) }));
+      if (!state.pageActive || generation !== state.generation) return;
+      state.status = status;
+      render(state.status); toast("价格同步已开始，来源绑定在保存设置后生效");
+    } catch (error) { setText("settings-error", safeMessage(error.message)); $("settings-error").hidden = false; }
+    finally { state.syncingPrices = false; renderPricingStatus(); }
   }
 
   function appendPricingRow(model, override, { focus = false } = {}) {
     const row = document.createElement("tr");
     const nameCell = document.createElement("td");
-    let modelInput;
+    let modelInput; let source;
     if (model) {
       const name = document.createElement("span"); name.className = "pricing-model-name"; name.textContent = model.id;
-      const source = document.createElement("span"); source.className = "pricing-model-source"; source.textContent = model.source || "服务价格";
+      source = document.createElement("span"); source.className = "pricing-model-source"; source.textContent = model.source || "服务价格";
+      source.title = (model.notes || []).join("；");
       nameCell.append(name, source);
     } else {
       modelInput = document.createElement("input"); modelInput.type = "text"; modelInput.className = "model-name-input"; modelInput.placeholder = "模型 ID"; modelInput.setAttribute("aria-label", "新模型 ID"); modelInput.maxLength = 200;
@@ -446,12 +576,13 @@
       const automaticRate = key === "cacheWrite" ? number(model?.cacheWrite, number(model?.input)) : number(model?.[key]);
       const overrideRate = key === "cacheWrite" ? number(override?.cacheWrite, number(override?.input, automaticRate)) : number(override?.[key], automaticRate);
       input.type = "number"; input.min = "0"; input.max = "1000000"; input.step = "any"; input.value = overrideRate; input.id = `price-${index}-${key}`; input.setAttribute("aria-label", `${model?.id || "新模型"} ${label}价格，美元每百万 tokens`);
+      if (!override && model && (model.available === false || model[key] === null)) { input.value = ""; input.placeholder = model.waitingForExchangeRate ? "待汇率" : "待同步"; }
       input.disabled = !!model && !override; inputs[key] = input; cell.append(input); row.append(cell);
     }
     const toggleCell = document.createElement("td"); const custom = document.createElement("input"); custom.type = "checkbox"; custom.checked = !!override || !model; custom.setAttribute("aria-label", `为 ${model?.id || "新模型"} 使用自定义价格`);
     custom.addEventListener("change", () => { Object.values(inputs).forEach((input) => { input.disabled = !custom.checked; }); });
     toggleCell.append(custom); row.append(toggleCell); $("pricing-body").append(row);
-    state.pricingRows.push({ model, modelInput, inputs, custom });
+    state.pricingRows.push({ model, modelInput, inputs, custom, source });
     if (!model && focus) {
       if ($("advanced-pricing")) $("advanced-pricing").open = true;
       modelInput.focus();
@@ -459,15 +590,17 @@
   }
 
   function collectConfig() {
-    const modelRates = {};
+    const modelRates = { ...(state.status.config.modelRates || {}) };
+    const seen = new Set();
     for (const row of state.pricingRows) {
-      if (!row.custom.checked) continue;
+      if (!row.custom.checked) { if (row.model) delete modelRates[row.model.id]; continue; }
       const id = (row.model?.id || row.modelInput.value).trim();
       if (!id) {
         if (!row.model && Object.values(row.inputs).every((input) => number(input.value) === 0)) continue;
         throw new Error("请为自定义价格填写模型 ID。");
       }
-      if (Object.hasOwn(modelRates, id)) throw new Error(`模型 ${id} 的价格配置重复，请检查。`);
+      if (seen.has(id) || (!row.model && Object.hasOwn(modelRates, id))) throw new Error(`模型 ${id} 的价格配置重复，请检查。`);
+      seen.add(id);
       const rates = {};
       for (const [key, input] of Object.entries(row.inputs)) {
         if (!input.value.trim() || !input.checkValidity()) throw new Error(`模型 ${id} 的价格必须是非负数字。`);
@@ -475,33 +608,56 @@
       }
       Object.defineProperty(modelRates, id, { value: rates, enumerable: true, configurable: true, writable: true });
     }
+    const pricingRoutes = {};
+    for (const row of state.pricingRoutes) {
+      const provider = row.input.value.trim(); const source = row.select.value;
+      if (!source && !provider) continue;
+      if (source && !provider) throw new Error("请选择价格来源对应的 DSH 服务 ID。");
+      if (!source) continue;
+      if (Object.hasOwn(pricingRoutes, provider)) throw new Error(`服务 ${provider} 的来源绑定重复。`);
+      Object.defineProperty(pricingRoutes, provider, { value: source, enumerable: true });
+    }
+    const pricingModelAliases = {};
+    for (const row of state.pricingAliases) {
+      const id = row.input.value.trim(); const model = row.target.value.trim();
+      if (!id && !model) continue;
+      if (!id || !model || Object.hasOwn(pricingModelAliases, id)) throw new Error("请补全型号映射并移除重复项。");
+      Object.defineProperty(pricingModelAliases, id, { value: model, enumerable: true });
+    }
+    const exchange = $("pricing-cny-per-usd");
+    if (exchange.value.trim() && !exchange.checkValidity()) throw new Error("请输入有效的人民币换算汇率。");
     return {
       fiveHourLimitUsd: number(state.status.config.fiveHourLimitUsd, 4),
       weeklyLimitUsd: number(state.status.config.weeklyLimitUsd, 20),
       enabled: $("enabled").checked,
       fiveHourEnabled: $("five-hour-enabled").checked,
-      maxOutputTokens: number($("max-output-tokens").value),
+      reservationMode: $("reservation-mode").value,
+      outputReservationTokens: number($("output-reservation-tokens").value),
       inputTokenMultiplier: number($("input-token-multiplier").value),
       modelRates,
+      autoPricingEnabled: $("auto-pricing-enabled").checked,
+      pricingCnyPerUsd: exchange.value.trim() ? number(exchange.value) : null,
+      pricingRoutes, pricingModelAliases,
     };
   }
 
   function setSaving(saving) {
     state.saving = saving;
     if (saving) state.generation += 1;
-    for (const id of ["save-settings", "cancel-settings", "close-settings", "add-model"]) $(id).disabled = saving;
-    $("settings-form").querySelectorAll("input").forEach((input) => {
+    for (const id of ["save-settings", "cancel-settings", "close-settings", "add-model", "add-pricing-route", "add-pricing-alias", "pricing-more"]) $(id).disabled = saving;
+    $("settings-form").querySelectorAll("input, select, .remove-mapping").forEach((input) => {
       if (saving) { input.dataset.wasDisabled = String(input.disabled); input.disabled = true; }
       else { input.disabled = input.dataset.wasDisabled === "true"; delete input.dataset.wasDisabled; }
     });
     setText("save-settings", saving ? "正在保存…" : "保存设置");
     $("settings-form").setAttribute("aria-busy", String(saving));
     setBusy();
+    renderPricingStatus();
   }
 
   async function saveSettings(event) {
     event.preventDefault();
-    if (state.saving) return;
+    if (state.saving || state.syncingPrices) return;
     $("settings-error").hidden = true;
     let config;
     try { config = collectConfig(); } catch (error) {
@@ -563,6 +719,10 @@
   $("settings-dialog").addEventListener("cancel", (event) => { if (state.saving) event.preventDefault(); });
   $("settings-form").addEventListener("submit", saveSettings);
   $("add-model").addEventListener("click", () => appendPricingRow(null, undefined, { focus: true }));
+  $("add-pricing-route").addEventListener("click", () => appendPricingRoute());
+  $("add-pricing-alias").addEventListener("click", () => appendPricingAlias());
+  $("sync-prices").addEventListener("click", syncPrices);
+  $("pricing-more").addEventListener("click", showMorePrices);
   $("request-search")?.addEventListener("input", (event) => {
     state.requestSearch = event.target.value;
     renderRequests(state.status?.recent || []);

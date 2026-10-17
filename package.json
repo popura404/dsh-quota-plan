@@ -1,6 +1,6 @@
 {
   "name": "dsh-quota-plan",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 的双窗口额度限制与 Plan 风格 GUI",
   "type": "module",
   "main": "./lib/index.js",
@@ -17,6 +17,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
+    "test": "node --test tests/*.test.js",
     "pack:plugin": "npm pack"
   },
   "engines": {

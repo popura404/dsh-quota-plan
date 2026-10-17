@@ -90,12 +90,22 @@
           <div class="setting-toggle"><div><label for="enabled">启用额度限制</label><p>请求开始前检查预算，并预留本次费用。</p></div><input id="enabled" name="enabled" type="checkbox" class="switch" role="switch"></div>
           <label class="checkbox-row"><input id="five-hour-enabled" name="fiveHourEnabled" type="checkbox"><span>同时启用 5 小时额度限制</span></label>
           <div class="settings-divider"></div>
-          <h3>请求预算</h3><p class="settings-intro">为请求预留足够空间，结束后按实际用量结算。</p>
-          <div class="form-grid"><div class="form-field"><label for="max-output-tokens">每次最大输出 tokens</label><input id="max-output-tokens" name="maxOutputTokens" type="number" min="1" max="1000000" step="1" required><p>用于限制输出及估算费用。</p></div><div class="form-field"><label for="input-token-multiplier">输入预留倍率</label><input id="input-token-multiplier" name="inputTokenMultiplier" type="number" min="1" max="10" step="0.01" required><p>按模型上下文容量保守预留，余额不足时提前拦截。</p></div></div>
+          <h3>请求预算</h3><p class="settings-intro">输入按本次请求估算，输出参考近期用量预留，结束后按实际用量结算。实际输出长度由 DSH 和模型决定。</p>
+          <div class="form-field"><label for="reservation-mode">输入预留方式</label><select id="reservation-mode" name="reservationMode"><option value="request">本次请求估算（默认）</option><option value="context">整个模型上下文容量（严格）</option></select><p>此选项仅影响输入预留。严格模式要求模型提供上下文容量。</p></div>
+          <div class="form-grid"><div class="form-field"><label for="output-reservation-tokens">无历史时输出预留 tokens</label><input id="output-reservation-tokens" name="outputReservationTokens" type="number" min="1" max="1000000" step="1" required><p>历史样本不足时使用，默认 2048。仅用于额度预留，不限制实际输出长度。</p></div><div class="form-field"><label for="input-token-multiplier">输入估算安全倍率</label><input id="input-token-multiplier" name="inputTokenMultiplier" type="number" min="1" max="10" step="0.01" required><p>输入估算乘此倍率后预留；严格模式对上下文容量使用相同倍率。</p></div></div>
+          <p class="settings-intro">同一服务和模型至少有 5 条有效完成记录后，输出预留会根据近期用量自动调整。实际输出超过预留仍按实际用量结算，额度耗尽后拦截后续请求。</p>
           <details id="advanced-pricing" class="advanced-settings"><summary><span>模型单价</span><span class="summary-hint">高级设置</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></summary><div class="advanced-content">
+          <div class="setting-toggle"><div><label for="auto-pricing-enabled">自动获取官方价格</label><p>按已绑定的来源每天更新，失败时保留有效缓存。</p></div><input id="auto-pricing-enabled" type="checkbox" class="switch" role="switch"></div>
+          <div class="pricing-sync-toolbar"><p id="pricing-sync-status" class="settings-intro" role="status">等待价格来源状态</p><button id="sync-prices" class="secondary-button" type="button">立即同步</button></div>
+          <div class="form-field exchange-field"><label for="pricing-cny-per-usd">人民币换算汇率 · 1 USD 对应 CNY</label><input id="pricing-cny-per-usd" type="number" min="0.000001" max="1000000" step="any" placeholder="使用人民币来源时填写"><p>留空时保留人民币原价，暂不用于美元额度记账。汇率由你确认。</p></div>
+          <div class="pricing-subheading"><h3>服务与价格来源</h3><button id="add-pricing-route" class="quiet-button" type="button">＋ 添加服务</button></div>
+          <p class="settings-intro">为实际调用的服务选择对应渠道。未绑定的服务使用手动价格。</p><datalist id="pricing-provider-list"></datalist><div id="pricing-routes" class="pricing-mappings"></div>
+          <details class="source-disclosure"><summary>查看价格来源与同步状态</summary><div id="pricing-sources" class="pricing-sources"></div></details>
+          <div class="pricing-subheading"><h3>精确型号映射</h3><button id="add-pricing-alias" class="quiet-button" type="button">＋ 添加映射</button></div><p class="settings-intro">选填。将完整的「服务/请求模型」对应到目录型号；云平台型号需要保留地域和部署范围。</p><div id="pricing-aliases" class="pricing-mappings"></div><datalist id="pricing-catalog-models"></datalist>
+          <div class="settings-divider"></div>
           <div class="pricing-heading"><div><h3>计价配置</h3><p class="settings-intro">高级设置 · 美元 / 百万 tokens。勾选「自定义」后覆盖自动价格。</p></div><button id="add-model" class="quiet-button" type="button">＋ 添加模型</button></div>
           <div class="pricing-scroll"><table class="pricing-table"><thead><tr><th scope="col">模型</th><th scope="col">输入</th><th scope="col">缓存命中</th><th scope="col">缓存写入</th><th scope="col">输出</th><th scope="col">自定义</th></tr></thead><tbody id="pricing-body"></tbody></table></div>
-          <p class="pricing-footnote">未勾选的模型使用服务提供的价格；未知模型必须先配置价格。</p></div></details>
+          <button id="pricing-more" class="quiet-button pricing-more" type="button" hidden>显示更多模型</button><p class="pricing-footnote">自定义单价优先；未勾选时使用有效同步价格或内置参考价。同名模型的手动配置也会生效。不同上下文和缓存 TTL 按标准档最高价保守计算，缓存存储时间费与额外工具费另计。</p></div></details>
           <div id="settings-error" class="form-error" role="alert" hidden></div>
         </div>
         <div class="dialog-footer"><span>保存设置会保留历史用量。</span><div><button id="cancel-settings" class="secondary-button" type="button">取消</button><button id="save-settings" class="primary-button" type="submit">保存设置</button></div></div>
